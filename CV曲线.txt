@@ -1,0 +1,110 @@
+File {
+	grid      = "n@node|NMOS@_msh.tdr" ## 输入包含掺杂信息的网格文件
+	current   = "@plot@"	## 输出包含时间、电压和电流的_des.plt曲线文件，简称current plot
+	plot      = "@tdrdat@"	## 输出包含掺杂浓度、电流密度、电势分布、电场分布等_des.tdr文件，简称为device_plot
+	parameter = "@parameter@"	## 输入参数文件
+    Output    = "@log@"	## 输出运行日志文件
+}
+
+Electrode {	## 点击边界条件定义
+	{ Name="drain" Voltage= (0.0 at 0.0, 1000.0 at 1000.0) }	## Drain电极脉冲定义
+	{ Name="source" Voltage= 0.0}
+	{ Name="gate" Voltage= 0.0 Material= "PolySi"}	## Gate电极材料定义
+}
+
+Physics {
+	Fermi AreaFactor = 4e7	## 激活费米分布，面积因子定义
+	EffectiveIntrinsicDensity ( OldSlotboom NoFermi )	## 能带模型
+	Recombination (SRH(DopingDependence TempDependence)Auger)	## 复合模型
+	Mobility (HighFieldSaturation Enormal(IALMob))	## 迁移率模型
+	IncompleteIonization (Split (Doping = "NitrogenConcentration" Weights = (0.5 0.5)))	## 非完全电离
+	Aniso (Mobility direction(SimulationSystem) = (1,0,0))}	## 各向异性
+	
+Physics(MaterialInterface= "SiliconCarbide/Oxide") {
+    Traps (FixedCharge Conc=1e11 Add2TotalDoping)
+}
+
+## 碳化硅-氧化物界面固定电荷定义，Add2TotalDoping表示把缺陷产生的掺杂也考虑到总体的浓度分布中
+Math {Extrapolate	## 外推算法，基于前两个解预估下一个解
+	Notdamped= 30	## 30步之内步长不衰减
+	Iterations= 15	## 牛顿迭代次数上限
+	RHSMax= 1e60	## 余误差项最大值设置
+	RHSFactor= 1e60	## 余误差因子设置
+	ExitOnFailure	## 用于仿真出错停止
+    DirectCurrent	## 接触电极表面电流密度积分作为电流值
+	method= ILS(set=31)	## 选择ILS求解器
+	ImplicitACSystem	## 用户看不到的、由软件内部构件、隐式的交流系统，并且无需构建 Mixed Model，用于单个器件的CV特性仿真 
+	ExtendedPrecision(128)	## CV特性精度扩展，IdVd等特性 80 即可
+	RhsMin= 1e-20 ## 余误差RHS最小值
+	Digits= 5	## 精度设置
+	ErrEff(electron)= 1e8 ErrEff(hole)= 1e8	## 电子和空穴参考密度设置，用于提升收敛性
+	RefDens_eGradQuasiFermi_Zero= 1.000e+12
+	RefDens_hGradQuasiFermi_Zero= 1.000e+12
+	## 电子和空穴准费米势梯度参考密度设置，用于提升收敛性
+	RefDens_eGradQuasiFermi_EparallelToInterface_HFS= 1.000e+12
+	RefDens_hGradQuasiFermi_EparallelToInterface_HFS= 1.000e+12
+	## 平行于界面高场速度饱和驱动力下的电子和空穴准费米势梯度参考密度设置，用于提升收敛性
+        ILSrc= "
+         set (21) { 
+            iterative (gmres(100), tolrel=1e-10, maxit=400);
+            preconditioning(ilut(1e-6,-1),left);
+            ordering(symmetric=nd, nonsymmetric=mpsilst);
+            options( compact=yes, linscale=2, verbose=0, refineresidual=5);
+         };
+         
+         set (31) { 
+            iterative (gmres(150), tolrel=1e-13, tolunprec=1e-11, tolabs=0, maxit=400);
+            preconditioning(ilut(1e-7,-1),left);
+            ordering(symmetric=nd, nonsymmetric=mpsilst);
+            options( compact=yes, linscale=2, verbose=0, refineresidual=10);
+         };
+         "
+	TensorGridAniso(aniso)	## 基于网格、准确性更高的各向异性算法
+	NumberofThreads= 4	## CPU线程数
+	Transient= BE	## 瞬态算法选择
+}
+
+Plot{
+  eDensity hDensity
+  TotalCurrent/Vector eCurrent/Vector hCurrent/Vector
+  eMobility hMobility
+  eVelocity hVelocity
+  eQuasiFermi hQuasiFermi
+  eTemperature hTemperature Temperature 
+  ElectricField/Vector Potential SpaceCharge
+  Doping DonorConcentration AcceptorConcentration
+  SRH Band2Band 
+  AvalancheGeneration eAvalancheGeneration hAvalancheGeneration
+  eGradQuasiFermi/Vector hGradQuasiFermi/Vector
+  eEparallel hEparallel eENormal hENormal
+  BandGap 
+  BandGapNarrowing
+  Affinity
+  ConductionBand ValenceBand
+  eBarrierTunneling hBarrierTunneling * BarrierTunneling
+  eTrappedCharge  hTrappedCharge
+  eGapStatesRecombination hGapStatesRecombination
+  eDirectTunnel hDirectTunnel
+   
+}
+
+Solve {	
+	Coupled (Iterations= 1000) { poisson }
+	Coupled (Iterations= 1000)  { poisson electron hole }
+
+	* NewCurrentFile="CV_"
+	Transient (	## 瞬态扫描 Vd 至 1000 V
+		InitialTime= 0 FinalTime= 1000
+		InitialStep= 0.001 MinStep= 1.0e-8 Maxstep= 2.0
+                        )
+	{ ACcoupled (
+                      StartFrequency=1e6
+                      EndFrequency=1e6
+                      NumberOfPoints=1	## 交流小信号扫描，确定起始频率，终止频率，执行分析的频率数
+                      node("source" "drain" "gate") ## 接触电极节点
+		      ACExtract = "@acplot@"	## 曲线文件
+	            )
+        { poisson electron hole } }	## 耦合求解泊松，电子空穴连续性方程
+————————————————
+版权声明：本文为CSDN博主「Eren-Yu」的原创文章，遵循CC 4.0 BY-SA版权协议，转载请附上原文出处链接及本声明。
+原文链接：https://blog.csdn.net/weixin_45293089/article/details/132036436
